@@ -1,26 +1,33 @@
 <?php
 
-namespace Gioni06\Gpt3Tokenizer;
-class Merges {
-    public function __construct(private string $path = __DIR__ . '/pretrained_vocab_files/merges.txt')
+namespace crazzy501\Gpt3Tokenizer;
+
+use RuntimeException;
+
+class Merges
+{
+    public function __construct(
+        private readonly string $path
+    )
     {
     }
 
     public function bpeMerges(): array
     {
         $lines = [];
-        $fp = @fopen($this->path, "r");
+        $fp = @fopen($this->path, 'rb');
         if ($fp) {
             // drop the first line of the buffer
             fgets($fp, 300);
             while (($buffer = fgets($fp, 300)) !== false) {
-                $line = array_filter(preg_split("/(\s+)/", $buffer), function($e) {
-                    return strlen(trim($e)) > 0;
-                });
+                $line = array_filter(
+                    preg_split("/(\s+)/", $buffer),
+                    static fn($e) => trim($e) !== ''
+                );
                 $lines[] = $line;
             }
             if (!feof($fp)) {
-                throw new Exception("Error: unexpected fgets() fail\n");
+                throw new RuntimeException('Error: unexpected fgets() fail');
             }
             fclose($fp);
         }

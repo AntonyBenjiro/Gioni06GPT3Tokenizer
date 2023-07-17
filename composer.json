@@ -1,5 +1,5 @@
 {
-  "name": "gioni06/gpt3-tokenizer",
+  "name": "crazzy501/gpt3-tokenizer",
   "description": "PHP package for Byte Pair Encoding (BPE) used by GPT-3.",
   "keywords": ["gpt-3", "openai", "gpt-2", "tokenizer", "encode", "decode"],
   "license": "Apache-2.0",
@@ -15,10 +15,14 @@
     {
       "name": "Jonas Duri",
       "email": "jonas.duri@gmail.com"
+    },
+    {
+      "name": "Antony Kuznetsov",
+      "email": "crazzy270@gmail.com"
     }
   ],
   "require": {
-    "php": "^8.0.2",
+    "php": "^8.2",
     "ext-mbstring": "*"
   },
   "require-dev": {
@@ -26,12 +30,7 @@
   },
   "autoload": {
     "psr-4": {
-        "Gioni06\\Gpt3Tokenizer\\": "src/"
-    }
-  },
-  "autoload-dev": {
-    "psr-4": {
-        "Gioni06\\Gpt3Tokenizer\\Tests\\": "tests/"
+        "crazzy501\\Gpt3Tokenizer\\": "src/"
     }
   }
 }

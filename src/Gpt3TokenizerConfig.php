@@ -1,36 +1,57 @@
 <?php
 
-namespace Gioni06\Gpt3Tokenizer;
+namespace crazzy501\Gpt3Tokenizer;
 
 class Gpt3TokenizerConfig
 {
 
-    private array $config = [
-        'mergesPath' => __DIR__ . '/pretrained_vocab_files/merges.txt',
-        'vocabPath' => __DIR__ . '/pretrained_vocab_files/vocab.json',
-        'useCache' => true,
-    ];
+    private string $mergesPath = __DIR__ . '/pretrained_vocab_files/merges.txt';
+    private string $vocabPath = __DIR__ . '/pretrained_vocab_files/vocab.json';
+    private CacheInterface|string $cache = CacheArray::class;
 
-    public function mergesPath($path): Gpt3TokenizerConfig
+    public function setMergesPath($path): Gpt3TokenizerConfig
     {
-        $this->config['mergesPath'] = $path;
+        $this->mergesPath = $path;
         return $this;
     }
 
-    public function vocabPath($path): Gpt3TokenizerConfig
+    public function setVocabPath($path): Gpt3TokenizerConfig
     {
-        $this->config['vocabPath'] = $path;
+        $this->vocabPath = $path;
         return $this;
     }
 
-    public function useCache($useCache): Gpt3TokenizerConfig
+    /**
+     * @return string
+     */
+    public function getCacheClass(): string
     {
-        $this->config['useCache'] = $useCache;
+        return $this->cache;
+    }
+
+    /**
+     * @param class-string|CacheInterface $cache
+     * @return Gpt3TokenizerConfig
+     */
+    public function setCacheClass(string $cache): Gpt3TokenizerConfig
+    {
+        $this->cache = $cache;
         return $this;
     }
 
-    public function getConfig(): array
+    /**
+     * @return string
+     */
+    public function getMergesPath(): string
     {
-        return $this->config;
+        return $this->mergesPath;
+    }
+
+    /**
+     * @return string
+     */
+    public function getVocabPath(): string
+    {
+        return $this->vocabPath;
     }
 }

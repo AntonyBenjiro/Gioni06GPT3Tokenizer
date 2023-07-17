@@ -1,71 +1,91 @@
 <?php
 
-namespace Gioni06\Gpt3Tokenizer;
+namespace crazzy501\Gpt3Tokenizer;
 
 class Gpt3Tokenizer
 {
-    const PAT_REGEX = "/'s|'t|'re|'ve|'m|'ll|'d| ?[[:alpha:]]+| ?[[:digit:]]+| ?[^[:space:]\pL\pN]+|\s+(?!\S)|\s+/u";
+    private const PAT_REGEX = "/'s|'t|'re|'ve|'m|'ll|'d| ?[[:alpha:]]+| ?[[:digit:]]+| ?[^[:space:]\pL\pN]+|\s+(?!\S)|\s+/u";
     private mixed $vocab;
-    private array $bpeMerges;
     private array $bpe_ranks;
-    private bool $apcuAvailable;
-
-    private array $cache = [];
-
-    private bool $useCache;
+    private mixed $cache;
 
 
     public function __construct(Gpt3TokenizerConfig $config)
     {
-        $vocabPath = $config->getConfig()['vocabPath'];
-        $vocab = new Vocab($vocabPath);
-        $this->vocab = $vocab->data();
-        // Free memory that is no longer needed
-        unset($vocab);
+        $vocabPath = $config->getVocabPath();
+        $this->vocab = json_decode(file_get_contents($vocabPath), true, 512, JSON_THROW_ON_ERROR);
+        $mergesPath = $config->getMergesPath();
+        $bpeMerges = (new Merges($mergesPath))->bpeMerges();
+        $this->bpe_ranks = array_combine(self::zipBpe($bpeMerges), range(0, count($bpeMerges) - 1));
 
-        $mergesPath = $config->getConfig()['mergesPath'];
-        $merges = new Merges($mergesPath);
-        $this->bpeMerges = $merges->bpeMerges();
-        $this->bpe_ranks = array_combine(Gpt3Tokenizer::zipBpe($this->bpeMerges), range(0, count($this->bpeMerges) - 1));
-        // Free memory that is no longer needed
-        unset($this->bpeMerges);
-        unset($merges);
-
-        $this->apcuAvailable = function_exists('apcu_enabled') && apcu_enabled();
-        $this->useCache = $config->getConfig()['useCache'];
+        $cacheClass = $config->getCacheClass();
+        $this->cache = new $cacheClass;
     }
 
-    private function cacheSet($key, $val): void
+    public static function zipBpe(array $bpeMerges): array
     {
-        if ($this->apcuAvailable) {
-            /** @noinspection PhpComposerExtensionStubsInspection */
-            apcu_store($key, $val);
-        } else {
-            $this->cache[$key] = $val;
+        $bpe = [];
+        foreach ($bpeMerges as $merge) {
+            $bpe[] = $merge[0] . ',' . $merge[1];
         }
+        return $bpe;
     }
 
-    private function cacheGet($key): mixed
+    /**
+     * Takes a given text and chunks it into encoded segments, with each segment containing a specified maximum
+     * number of tokens.
+     * @param string $text The input text to be encoded.
+     * @param int $maxTokenPerChunk The maximum number of tokens allowed per chunk.
+     * @return string[] An array of strings containing the encoded text.
+     */
+    public function chunk(string $text, int $maxTokenPerChunk): array
     {
-        if ($this->apcuAvailable) {
-            /** @noinspection PhpComposerExtensionStubsInspection */
-            return apcu_fetch($key);
-        } else {
-            return $this->cache[$key] ?? null;
-        }
+        return array_map([$this, 'decode'], $this->encodeInChunks($text, $maxTokenPerChunk));
     }
 
-    private function cacheExists($key): array|bool
+    /**
+     * Encodes a given text into chunks of Byte-Pair Encoded (BPE) tokens, with each chunk containing a specified
+     * maximum number of tokens.
+     * @param string $text The input text to be encoded.
+     * @param int $maxTokenPerChunk The maximum number of tokens allowed per chunk.
+     * @return int[][] An array of arrays containing BPE token chunks.
+     */
+    public function encodeInChunks(string $text, int $maxTokenPerChunk): array
     {
-        if ($this->apcuAvailable) {
-            /** @noinspection PhpComposerExtensionStubsInspection */
-            return apcu_exists($key);
-        } else {
-            return isset($this->cache[$key]);
+        $byte_encoder = self::bytes_to_unicode();
+
+        $bpe_tokens_chunks = array();
+        $bpe_tokens_current_chunk = array();
+
+        $matches = array();
+        preg_match_all(self::PAT_REGEX, $text, $matches);
+        foreach ($matches[0] as $token) {
+            $token = implode(array_map(
+                static fn($x) => $byte_encoder[$x],
+                self::encodeStr($token)
+            ));
+
+            $new_tokens = array_map(
+                fn($x) => $this->vocab[$x],
+                explode(' ', $this->bpe($token))
+            );
+
+            if ((count($bpe_tokens_current_chunk) + count($new_tokens)) > $maxTokenPerChunk) {
+                $bpe_tokens_chunks[] = $bpe_tokens_current_chunk;
+                $bpe_tokens_current_chunk = array();
+            }
+
+            $bpe_tokens_current_chunk = array_merge($bpe_tokens_current_chunk, $new_tokens);
         }
+
+        if (count($bpe_tokens_current_chunk) > 0) {
+            $bpe_tokens_chunks[] = $bpe_tokens_current_chunk;
+        }
+
+        return $bpe_tokens_chunks;
     }
 
-    public static function bytes_to_unicode(): array
+    private static function bytes_to_unicode(): array
     {
         // Bytes-to-Unicode is a list of utf-8 byte and a corresponding unicode string.
         // Using this static list is much faster than decoding the utf-8 everytime a character is encountered.
@@ -330,48 +350,21 @@ class Gpt3Tokenizer
         ];
     }
 
-    public static function encodeStr(string $str): array {
+    public static function encodeStr(string $str): array
+    {
         $bytes = str_split(bin2hex(mb_convert_encoding($str, 'UTF-8')), 2);
-        return array_map(function($byte){
-            return hexdec($byte);
-        },$bytes);
-    }
-
-    public static function decodeStr(array $codes): string {
-        $bytes = array_map(function($code) {
-            return chr($code);
-        }, $codes);
-        return implode($bytes);
-    }
-
-    public static function get_pairs($input_arr): array
-    {
-        $pairs = array();
-        for ($i = 0; $i < count($input_arr) - 1; $i++) {
-            $pairs[] = array($input_arr[$i], $input_arr[$i + 1]);
-        }
-        // remove duplicates
-        return array_unique($pairs, SORT_REGULAR);
-    }
-
-    public static function zipBpe(array $bpeMerges): array
-    {
-        $bpe = [];
-        foreach ($bpeMerges as $merge) {
-            $bpe[] = $merge[0] . ',' . $merge[1];
-        }
-        return $bpe;
+        return array_map(static fn($byte) => hexdec($byte), $bytes);
     }
 
     public function bpe(string $token): string
     {
-        if($this->useCache && $this->cacheExists($token)) {
-            return $this->cacheGet($token);
+        if ($this->cache->exists($token)) {
+            return $this->cache->get($token);
         }
 
         $chars = mb_str_split($token);
         $pairs = self::get_pairs($chars);
-        if(!count($pairs)) {
+        if (!count($pairs)) {
             return implode(" ", $chars);
         }
 
@@ -387,9 +380,7 @@ class Gpt3Tokenizer
             }
             ksort($minPairs);
 
-            $bigram = $minPairs[min(array_map(function($x) {
-                return intval($x);
-            }, array_keys($minPairs)))];
+            $bigram = $minPairs[min(array_map(static fn($x) => (int)$x, array_keys($minPairs)))];
 
             $bigramStr = implode(",", $bigram);
             if (!array_key_exists($bigramStr, $this->bpe_ranks)) {
@@ -408,11 +399,11 @@ class Gpt3Tokenizer
                     break;
                 }
                 $new_word = array_merge($new_word, array_slice($chars, $i, $j));
-                $i = $i + $j;
+                $i += $j;
 
                 if ($chars[$i] === $first && $i < count($chars) - 1 && $chars[$i + 1] === $second) {
                     $new_word[] = $first . $second;
-                    $i = $i + 2;
+                    $i += 2;
                 } else {
                     $new_word[] = $chars[$i];
                     $i++;
@@ -421,15 +412,51 @@ class Gpt3Tokenizer
             $chars = $new_word;
             if (count($chars) === 1) {
                 break;
-            } else {
-                $pairs = self::get_pairs($chars);
             }
+
+            $pairs = self::get_pairs($chars);
         }
         $result = implode(" ", $chars);
-        if($this->useCache) {
-            $this->cacheSet($token, $result);
-        }
+        $this->cache->set($token, $result);
         return $result;
+    }
+
+    public static function get_pairs($input_arr): array
+    {
+        $pairs = array();
+        for ($i = 0; $i < count($input_arr) - 1; $i++) {
+            $pairs[] = array($input_arr[$i], $input_arr[$i + 1]);
+        }
+        // remove duplicates
+        return array_unique($pairs, SORT_REGULAR);
+    }
+
+    public function decode(array $tokens): string
+    {
+        $decoder = array_flip($this->vocab);
+        $byte_decoder = array_flip(self::bytes_to_unicode());
+
+        $text = array_map(static fn($x) => $decoder[$x], $tokens);
+
+        $text = implode($text);
+        $chars = mb_str_split($text);
+        $decodedChars = array();
+        foreach ($chars as $iValue) {
+            $decodedChars[] = $byte_decoder[$iValue];
+        }
+        return self::decodeStr($decodedChars);
+    }
+
+    public static function decodeStr(array $codes): string
+    {
+        $bytes = array_map(static fn($code) => chr($code), $codes);
+        return implode($bytes);
+    }
+
+    public function count(string $text): int
+    {
+        $tokens = $this->encode($text);
+        return count($tokens);
     }
 
     public function encode(string $text): array
@@ -439,94 +466,11 @@ class Gpt3Tokenizer
         $matches = array();
         preg_match_all(self::PAT_REGEX, $text, $matches);
         foreach ($matches[0] as $token) {
-            $token = implode(array_map(function($x) use ($byte_encoder) {
-                return $byte_encoder[$x];
-            }, self::encodeStr($token)));
+            $token = implode(array_map(static fn($x) => $byte_encoder[$x], self::encodeStr($token)));
 
-            $new_tokens = array_map(function($x) {
-                return $this->vocab[$x];
-            }, explode(' ', $this->bpe($token)));
+            $new_tokens = array_map(fn($x) => $this->vocab[$x], explode(' ', $this->bpe($token)));
             $bpe_tokens = array_merge($bpe_tokens, $new_tokens);
         }
         return $bpe_tokens;
-    }
-
-    /**
-     * Encodes a given text into chunks of Byte-Pair Encoded (BPE) tokens, with each chunk containing a specified
-     * maximum number of tokens.
-     * @param string $text The input text to be encoded.
-     * @param int $maxTokenPerChunk The maximum number of tokens allowed per chunk.
-     * @return int[][] An array of arrays containing BPE token chunks.
-     */
-    public function encodeInChunks(string $text, int $maxTokenPerChunk): array
-    {
-        $byte_encoder = self::bytes_to_unicode();
-
-        $bpe_tokens_chunks = array();
-        $bpe_tokens_current_chunk = array();
-
-        $matches = array();
-        preg_match_all(self::PAT_REGEX, $text, $matches);
-        foreach ($matches[0] as $token) {
-            $token = implode(array_map(function($x) use ($byte_encoder) {
-                return $byte_encoder[$x];
-            }, self::encodeStr($token)));
-
-            $new_tokens = array_map(function($x) {
-                return $this->vocab[$x];
-            }, explode(' ', $this->bpe($token)));
-
-            if ((count($bpe_tokens_current_chunk) + count($new_tokens)) > $maxTokenPerChunk) {
-                $bpe_tokens_chunks[] = $bpe_tokens_current_chunk;
-                $bpe_tokens_current_chunk = array();
-            }
-
-            $bpe_tokens_current_chunk = array_merge($bpe_tokens_current_chunk, $new_tokens);
-        }
-
-        if (count($bpe_tokens_current_chunk) > 0) {
-            $bpe_tokens_chunks[] = $bpe_tokens_current_chunk;
-        }
-
-        return $bpe_tokens_chunks;
-    }
-
-    /**
-     * Takes a given text and chunks it into encoded segments, with each segment containing a specified maximum
-     * number of tokens.
-     * @param string $text The input text to be encoded.
-     * @param int $maxTokenPerChunk The maximum number of tokens allowed per chunk.
-     * @return string[] An array of strings containing the encoded text.
-     */
-    public function chunk(string $text, int $maxTokenPerChunk): array
-    {
-        return array_map(
-            [$this, 'decode'],
-            $this->encodeInChunks($text, $maxTokenPerChunk)
-        );
-    }
-
-    public function decode(array $tokens): string
-    {
-        $decoder = array_flip($this->vocab);
-        $byte_decoder = array_flip(self::bytes_to_unicode());
-
-        $text = array_map(function($x) use ($decoder) {
-            return $decoder[$x];
-        }, $tokens);
-
-        $text = implode($text);
-        $chars = mb_str_split($text);
-        $decodedChars = array();
-        for ($i = 0; $i < count($chars); $i++) {
-            $decodedChars[] = $byte_decoder[$chars[$i]];
-        }
-        return self::decodeStr($decodedChars);
-    }
-
-    public function count(string $text): int
-    {
-        $tokens = self::encode($text);
-        return count($tokens);
     }
 }
