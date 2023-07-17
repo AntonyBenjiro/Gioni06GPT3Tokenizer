@@ -2,6 +2,10 @@
 
 namespace crazzy501\Gpt3Tokenizer;
 
+use function apc_exists;
+use function apcu_fetch;
+use function apcu_store;
+
 class CacheApcu implements CacheInterface
 {
 
